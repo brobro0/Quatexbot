@@ -6,7 +6,6 @@ import http from 'http';
 
 dotenv.config();
 
-// Dummy HTTP Server for Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -37,7 +36,6 @@ bot.on('photo', async (ctx) => {
     const fileId = photos[photos.length - 1].file_id;
     const fileLink = await ctx.telegram.getFileLink(fileId);
 
-    // Download & Preprocess image
     const imgResponse = await fetch(fileLink.href);
     const arrayBuffer = await imgResponse.arrayBuffer();
     const inputBuffer = Buffer.from(arrayBuffer);
@@ -65,41 +63,50 @@ REASONING: [1-2 sentences concise institutional reasoning]
 Rule: If the signal is conflicting, unclear, or near strong resistance/support in a sideways channel, choose NO TRADE.
 `;
 
-    // Direct Gemini REST API Call
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-    
-    const apiRes = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
+    // Active vision models to try in sequence
+    const availableModels = ['gemini-2.0-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-2.5-flash'];
+    let replyText = null;
+    let lastError = null;
+
+    for (const modelName of availableModels) {
+      try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
+        const apiRes = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
               {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: base64Data
-                }
-              },
-              {
-                text: promptText
+                parts: [
+                  {
+                    inline_data: {
+                      mime_type: 'image/jpeg',
+                      data: base64Data
+                    }
+                  },
+                  { text: promptText }
+                ]
               }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.1
+            ],
+            generationConfig: { temperature: 0.1 }
+          })
+        });
+
+        const data = await apiRes.json();
+        if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+          replyText = data.candidates[0].content.parts[0].text.trim();
+          break;
+        } else if (data.error) {
+          lastError = data.error.message;
         }
-      })
-    });
-
-    const data = await apiRes.json();
-
-    if (data.error) {
-      throw new Error(data.error.message || "Gemini API Error");
+      } catch (err) {
+        lastError = err.message;
+      }
     }
 
-    const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "কোনো বিশ্লেষণ তৈরি করা সম্ভব হয়নি।";
+    if (!replyText) {
+      throw new Error(lastError || "Could not generate analysis from any active model.");
+    }
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
     
